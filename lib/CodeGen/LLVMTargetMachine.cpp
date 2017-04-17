@@ -33,6 +33,9 @@
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
+
+#include "LoadReplacementPass.h"
+
 using namespace llvm;
 
 // Enable or disable FastISel. Both options are needed, because
@@ -271,9 +274,9 @@ bool LLVMTargetMachine::addPassesToEmitFile(
   if (!Printer)
     return true;
 
+  PM.add(new LoadReplacementPass());
   PM.add(Printer);
   PM.add(createFreeMachineFunctionPass());
-
   return false;
 }
 

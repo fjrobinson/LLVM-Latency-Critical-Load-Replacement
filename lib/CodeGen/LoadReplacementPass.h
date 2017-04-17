@@ -5,10 +5,17 @@
 
 namespace llvm {
   class MachineFunction;
+  class AnalysisUsage;
 
   class LoadReplacementPass: public MachineFunctionPass {
+  private:
+    static char ID;
+
   public:
     LoadReplacementPass();
+    StringRef getPassName() const override;
+
+    void getAnalysisUsage(AnalysisUsage &AU) const override;
     virtual bool runOnMachineFunction(MachineFunction& mf) override;
   };
 }
