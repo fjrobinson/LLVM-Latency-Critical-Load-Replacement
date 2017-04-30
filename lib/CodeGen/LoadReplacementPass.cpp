@@ -23,42 +23,109 @@ namespace llvm {
   class LoadRegister;
   class BasicBlockLoadUseInfo;
 
-  enum RegState {
+  typedef std::vector<BasicBlockLoadUseInfo*> TraversalPath;
+  // class TraversalPath {
+  //   std::vector<BasicBlockLoadUseInfo*> path;
+
+  // };
+
+  enum class RegState {
     Unused,
     Used,
     Overwritten
   };
 
+  // This class is a wrapper around MachineInstr so that can hold cost
+  // information.
+  class InstrHolder {
+  private:
+    // Machine instruction corresponding to this holder
+    MachineInstr* mi;
+
+    // Costs of use (pre) or define (post)
+    unsigned pre_cost;
+    unsigned post_cost;
+
+  public:
+    // // Default Constructor
+    // InstrHolder()
+    //   : InstrHolder(nullptr, 0, 0)
+    // {}
+
+    // Construct and setup costs
+    InstrHolder(MachineInstr* mi, unsigned pre_cost, unsigned post_cost)
+      : mi(mi),
+        pre_cost(pre_cost),
+        post_cost(post_cost)
+    {
+      assert(mi && "Machine instruction cannot be null");
+    }
+
+    // Default Constructor
+    InstrHolder(const InstrHolder& other)
+      : InstrHolder(other.mi, other.getPreCost(), other.getPostCost())
+    {}
+
+    // Default Constructor
+    InstrHolder(const InstrHolder&& other)
+      : InstrHolder(other.mi, other.getPreCost(), other.getPostCost())
+    {}
+
+    // Get the cost of instructions before this instruction in the basic block
+    unsigned getPreCost() const {
+      return pre_cost;
+    }
+
+    // Get the cost of instructions after this instruction in the basic block
+    unsigned getPostCost() const {
+      return post_cost;
+    }
+
+    // Get the corresponding machine instruction.
+    MachineInstr* operator->() const {
+      return mi;
+    }
+
+    InstrHolder& operator=(const InstrHolder& other) {
+      mi = other.mi;
+      pre_cost = other.getPreCost();
+      post_cost = other.getPostCost();
+      return *this;
+    }
+  };
+
   class LoadRegister {
     RegState path_state;
-    unsigned bb_cost;
+    //unsigned bb_cost;
 
     const BasicBlockLoadUseInfo& parent;
     const MachineOperand& mo;
-    MachineInstr* instr;
+    //MachineInstr* instr;
+    InstrHolder instr;
 
-    std::shared_ptr<std::vector<MachineInstr*>> users;
+    std::shared_ptr<std::vector<InstrHolder>> users;
 
     LoadRegister(const LoadRegister* other)
       : path_state(other->getPathState()),
-        bb_cost(other->bb_cost),
+        //bb_cost(other->bb_cost),
         parent(other->parent),
         mo(other->mo),
-        instr(other->getInstr()),
-        users(other->users) {}
+        instr(other->instr),
+        users(other->users)
+    {}
 
     RegState getPathState() const {
       return path_state;
     }
 
   public:
-    LoadRegister(const MachineOperand& mo, const BasicBlockLoadUseInfo& parent, MachineInstr* instr, unsigned cost)
-      : path_state(Unused),
-        bb_cost(cost),
+    LoadRegister(const MachineOperand& mo, const BasicBlockLoadUseInfo& parent, InstrHolder instr)
+      : path_state(RegState::Unused),
+        //bb_cost(cost),
         parent(parent),
         mo(mo),
         instr(instr),
-        users(new std::vector<MachineInstr*>()) {
+        users(new std::vector<InstrHolder>()) {
       assert(instr->mayLoad() && "LoadInstr must be loadable");
     }
 
@@ -74,7 +141,7 @@ namespace llvm {
       return mo.getReg();
     }
 
-    MachineInstr* getInstr() const {
+    InstrHolder getInstr() const {
       return instr;
     }
 
@@ -83,30 +150,19 @@ namespace llvm {
     }
 
     bool isUnusedOnPath() const {
-      return getPathState() == Unused;
+      return getPathState() == RegState::Unused;
     }
 
     bool isUsedOnPath() const {
-      return getPathState() == Used;
+      return getPathState() == RegState::Used;
     }
 
     bool isOverwrittenOnPath() const {
-      return getPathState() == Overwritten;
+      return getPathState() == RegState::Overwritten;
     }
 
-    void setUsedOnPath() {
-      assert(getPathState() == Unused &&
-             "Only state transitions from unused or uninitialized are allowed");
-      path_state = Used;
-    }
-
-    void setOverwrittenOnPath() {
-      assert(getPathState() == Unused &&
-             "Only state transitions from unused to another state are allowed");
-      path_state = Overwritten;
-    }
-
-    bool usedInOtherBB() const {
+    // Check if this Load instruction is used by another basic block
+    bool isUsedInOtherBB() const {
       for (auto user : *users) {
         if (instr->getParent() != user->getParent())
           return false;
@@ -114,7 +170,19 @@ namespace llvm {
       return true;
     }
 
-    void addUse(MachineInstr* user) {
+    void setUsedOnPath() {
+      assert(getPathState() == RegState::Unused &&
+             "Only state transitions from unused or uninitialized are allowed");
+      path_state = RegState::Used;
+    }
+
+    void setOverwrittenOnPath() {
+      assert(getPathState() == RegState::Unused &&
+             "Only state transitions from unused to another state are allowed");
+      path_state = RegState::Overwritten;
+    }
+
+    void addUse(InstrHolder user) {
       users->push_back(user);
     }
 
@@ -122,7 +190,7 @@ namespace llvm {
     // load instruction appears in the use instruction.
     //
     // returns true if successfully added to the user list otherwise false.
-    bool addUseCandidate(MachineInstr* candidate) {
+    bool addUseCandidate(InstrHolder candidate) {
       for (unsigned i = 0, e = candidate->getNumOperands(); i != e; ++i) {
         MachineOperand& op = candidate->getOperand(i);
 
@@ -163,8 +231,11 @@ namespace llvm {
     void print(raw_ostream& os, ModuleSlotTracker& mst, const TargetRegisterInfo* tri, unsigned cur_indent) const {
       auto color = raw_ostream::GREEN;
 
-      if (isUnusedOnPath()) {
-        color = raw_ostream::YELLOW;
+      if (isUnusedOnPath() && isUsedInOtherBB()) {
+        color = raw_ostream::BLUE;
+      }
+      else if (isUnusedOnPath()) {
+        color = raw_ostream::CYAN;
       }
       else if (isOverwrittenOnPath()) {
         color = raw_ostream::RED;
@@ -176,7 +247,7 @@ namespace llvm {
       os.changeColor(color);
       os << "R" << getReg() << ": " << PrintReg(getReg(), tri, mo.getSubReg());
       os.resetColor();
-      os << " in instruction (Cost: " << bb_cost << "): ";
+      os << " in instruction (Cost: " << instr.getPreCost() << " - " << instr.getPostCost() << "): ";
       print_instr(os, mst, 0);
 
       print_users(os, mst, cur_indent + 2);
@@ -195,25 +266,25 @@ namespace llvm {
     unsigned total_cost;
 
     std::vector<RegState> first_reg_state_changes;
-    std::vector<MachineInstr*> first_reg_users;
+    std::vector<Optional<InstrHolder>> first_reg_users;
     LoadRegPtrVec load_regs;
     LoadRegPtrVec final_active_regs;
 
-    void processFirstStateChanges(MachineInstr* mi,
+    void processFirstStateChanges(InstrHolder mi,
                                   const MachineOperand& mop,
                                   unsigned reg,
                                   RegState new_state) {
-      assert(new_state != Unused);
+      assert(new_state != RegState::Unused);
 
-      if (first_reg_state_changes[reg] == Unused) {
+      if (first_reg_state_changes[reg] == RegState::Unused) {
         assert(!first_reg_users[reg] && "User is not null");
 
         first_reg_state_changes[reg] = new_state;
-        first_reg_users[reg] = mi;
+        first_reg_users[reg] = Optional<InstrHolder>(mi);
       }
     }
 
-    void processInstr(MachineInstr* mi) {
+    void processInstr(InstrHolder mi) {
       std::vector<const MachineOperand*> def_regs;
 
       for (unsigned i = 0, e = mi->getNumOperands(); i != e; ++i) {
@@ -241,7 +312,7 @@ namespace llvm {
       }
     }
 
-    void processLoad(MachineInstr* mi, const MachineOperand& mop) {
+    void processLoad(InstrHolder mi, const MachineOperand& mop) {
       assert(mop.isReg() && "MachineOperand must be a register for processing");
       assert(mi->mayLoad() && "MachineInstruction mi must be a load instruction");
       assert(mop.isDef() && "A load MachineOperand is expected to define a "
@@ -249,9 +320,9 @@ namespace llvm {
 
       unsigned reg = mop.getReg();
 
-      processFirstStateChanges(mi, mop, reg, Overwritten);
+      processFirstStateChanges(mi, mop, reg, RegState::Overwritten);
 
-      auto lr = std::shared_ptr<LoadRegister>(new LoadRegister(mop, *this, mi, getCost()));
+      auto lr = std::shared_ptr<LoadRegister>(new LoadRegister(mop, *this, mi));
 
       if (final_active_regs[reg] && final_active_regs[reg]->isUnusedOnPath()) {
         final_active_regs[reg]->setOverwrittenOnPath();
@@ -261,7 +332,7 @@ namespace llvm {
       load_regs.push_back(lr);
     }
 
-    void processDefine(MachineInstr* mi, const MachineOperand& mop) {
+    void processDefine(InstrHolder mi, const MachineOperand& mop) {
       assert(mop.isReg() && "MachineOperand must be a register for processing");
       assert(!mi->mayLoad() && "MachineInstruction mi must not be a load instruction");
       assert(mop.isDef() && "A load MachineOperand is expected to define a "
@@ -270,7 +341,7 @@ namespace llvm {
       unsigned reg = mop.getReg();
 
       // Evaluate first state change if applicable
-      processFirstStateChanges(mi, mop, reg, Overwritten);
+      processFirstStateChanges(mi, mop, reg, RegState::Overwritten);
 
       if (final_active_regs[reg] && final_active_regs[reg]->isUnusedOnPath()) {
         final_active_regs[reg]->setOverwrittenOnPath();
@@ -278,14 +349,14 @@ namespace llvm {
       }
     }
 
-    void processUse(MachineInstr* mi, const MachineOperand& mop) {
+    void processUse(InstrHolder mi, const MachineOperand& mop) {
       assert(mop.isReg() && "MachineOperand must be a register for processing");
       assert(!mop.isDef() && "This will overwrite nullifying legitimate uses");
 
       unsigned reg = mop.getReg();
 
       // Evaluate first state change if applicable
-      processFirstStateChanges(mi, mop, reg, Used);
+      processFirstStateChanges(mi, mop, reg, RegState::Used);
 
       if (final_active_regs[reg] && final_active_regs[reg]->isUnusedOnPath()) {
         final_active_regs[reg]->setUsedOnPath();
@@ -298,19 +369,31 @@ namespace llvm {
     BasicBlockLoadUseInfo(MachineBasicBlock& mbb, const TargetInstrInfo* tii, unsigned num_regs)
       : mbb(mbb),
         total_cost(0),
-        first_reg_state_changes(std::vector<RegState>(num_regs, Unused)),
-        first_reg_users(std::vector<MachineInstr*>(num_regs, nullptr)),
+        first_reg_state_changes(std::vector<RegState>(num_regs, RegState::Unused)),
+        first_reg_users(std::vector<Optional<InstrHolder>>(num_regs)),
         final_active_regs(std::vector<std::shared_ptr<LoadRegister>>(num_regs, nullptr)) {
       TargetSchedModel tsm;
       const InstrItineraryData* iid = tsm.getInstrItineraries();
 
-      for (MachineBasicBlock::iterator mii = mbb.begin(), mie = mbb.end(); mii != mie; ) {
+      unsigned accum_cost = 0;
+
+      // First pass should measure the cost of the basic block
+      for (MachineBasicBlock::iterator mii = mbb.begin(), mie = mbb.end(); mii != mie; ++mii) {
         MachineInstr *mi = &*mii;
         unsigned instr_cost = tii->getInstrLatency(iid, *mi, nullptr);
-        ++mii;
 
-        processInstr(mi);
         total_cost += instr_cost;
+      }
+
+      // Second pass measures the distances from the begining and end of the
+      // basic block
+      for (MachineBasicBlock::iterator mii = mbb.begin(), mie = mbb.end(); mii != mie; ++mii) {
+        MachineInstr *mi = &*mii;
+        unsigned instr_cost = tii->getInstrLatency(iid, *mi, nullptr);
+        InstrHolder mih(mi, accum_cost, total_cost - accum_cost);
+
+        accum_cost += instr_cost;
+        processInstr(mih);
       }
     }
 
@@ -327,7 +410,13 @@ namespace llvm {
       return mbb;
     }
 
-    LoadRegPtrVec traverse(const LoadRegPtrVec& prev_unused, LoadRegPtrVec& accumulator, bool& accumulator_changed) const {
+    // Accumulate information about this basic block
+    //
+    // TODO: This will probably need to be changed for use with our new
+    // algorithm
+    LoadRegPtrVec traverse(const LoadRegPtrVec& prev_unused,
+                           LoadRegPtrVec& accumulator,
+                           bool& accumulator_changed) const {
       LoadRegPtrVec new_unused(prev_unused.size(), nullptr);
 
       // Match unused loads in prev_unused with first_reg_state_changes
@@ -336,15 +425,15 @@ namespace llvm {
           auto lrf = lr->forkOnBranch();
           unsigned mreg = lrf->getReg();
 
-          if (first_reg_state_changes[mreg] == Used) {
+          if (first_reg_state_changes[mreg] == RegState::Used) {
             assert(first_reg_users[mreg] &&
                    "The vectors first_reg_state_changes and first_reg_users must "
                    "mirror eachother");
 
-            lrf->addUse(first_reg_users[mreg]);
+            lrf->addUse(*first_reg_users[mreg]);
             lrf->setUsedOnPath();
           }
-          else if (first_reg_state_changes[mreg] == Overwritten) {
+          else if (first_reg_state_changes[mreg] == RegState::Overwritten) {
             assert(first_reg_users[mreg] &&
                    "The vectors first_reg_state_changes and first_reg_users must "
                    "mirror eachother");
@@ -410,9 +499,6 @@ namespace llvm {
     }
   };
 
-  typedef std::vector<BasicBlockLoadUseInfo*> TraversalPath;
-
-
   bool hasVisited(BasicBlockLoadUseInfo& node, TraversalPath& path) {
     for (auto p : path) {
       if (node == *p) {
@@ -439,20 +525,21 @@ namespace llvm {
     LoadRegPtrVec active_regs;
 
   public:
+    // Create FunctionLoadInfo and walk function CFG
     FunctionLoadInfo(MachineFunction& mf)
       : mf(mf),
         regs(),
         active_regs(std::vector<std::shared_ptr<LoadRegister>>(mf.getSubtarget().getRegisterInfo()->getNumRegs(), nullptr)) {
-      const TargetInstrInfo* tii = mf.getSubtarget().getInstrInfo();
-
+      // Get the register count
       unsigned num_regs = mf.getSubtarget().getRegisterInfo()->getNumRegs();
+      // Get the number of basic blocks
       unsigned num_blocks = mf.getNumBlockIDs();
 
+      const TargetInstrInfo* tii = mf.getSubtarget().getInstrInfo();
       ModuleSlotTracker mst(mf.getFunction()->getParent());
-
       mst.incorporateFunction(*mf.getFunction());
 
-      // Create the basic block list
+      // Create the basic block usage analysis list
       for (unsigned id = 0; id < num_blocks; ++id) {
         BasicBlockLoadUseInfo bb_new(*mf.getBlockNumbered(id), tii, num_regs);
         bb_list.push_back(bb_new);
@@ -465,19 +552,26 @@ namespace llvm {
       LoadRegPtrVec accumulator;
       LoadRegPtrVec cur_active_regs(num_regs, nullptr);
 
+      // Do the walk of the
       walkFunction(cur_mbb, visited, accumulator, cur_active_regs);
       printLoadRegPtrVec(accumulator, mst, mf.getSubtarget().getRegisterInfo());
     }
 
+    // Perform a depth first traversal of the function basic blocks taking note
+    // of loads and usages
+    //
+    // TODO: This will probably need to be changed for use with our new
+    // algorithm
     void walkFunction(BasicBlockLoadUseInfo& cur,
                       TraversalPath visited_list,
                       LoadRegPtrVec& accumulator,
                       LoadRegPtrVec cur_active_regs) {
       bool acc_changed;
-      LoadRegPtrVec next_active_regs = cur.traverse(cur_active_regs, accumulator, acc_changed);
 
       if (hasVisited(cur, visited_list))
         return;
+
+      LoadRegPtrVec next_active_regs = cur.traverse(cur_active_regs, accumulator, acc_changed);
 
       visited_list.push_back(&cur);
 
@@ -566,99 +660,14 @@ void LoadReplacementPass::getAnalysisUsage(AnalysisUsage &AU) const {
     MachineFunctionPass::getAnalysisUsage(AU);
 }
 
+// Entry function into LoadReplacementPass
 bool LoadReplacementPass::runOnMachineFunction(MachineFunction& mf) {
-  auto os = llvm::make_unique<raw_fd_ostream>(1, false);
+  // auto os = llvm::make_unique<raw_fd_ostream>(1, false);
 
-  ModuleSlotTracker MST(mf.getFunction()->getParent());
-  MST.incorporateFunction(*mf.getFunction());
+  // ModuleSlotTracker MST(mf.getFunction()->getParent());
+  // MST.incorporateFunction(*mf.getFunction());
+  mf.viewCFGOnly();
 
   FunctionLoadInfo fli(mf);
   return false;
-  // for (MachineBasicBlock &MBB : mf) {
-  //   // Original basic block printer
-  //   //MBB.print(*os, MST, nullptr);
-
-  //   os->indent(0*indent);
-
-  //   // Print basic block information
-  //   *os << "BB#" << MBB.getNumber() << ": " << MBB.getFullName();
-
-  //   // Print predecessor information
-  //   if (!MBB.pred_empty()){
-  //     *os << " PREDESSORS:";
-  //     for (MachineBasicBlock::const_pred_iterator PI = MBB.pred_begin(), E = MBB.pred_end(); PI != E; ++PI) {
-  //       *os << " BB#" << (*PI)->getNumber();
-  //     }
-  //   }
-  //   *os << " {\n";
-
-  //   // Iterate over instructions
-  //   for (MachineBasicBlock::iterator MII = MBB.begin(), MIE = MBB.end(); MII != MIE; ) {
-  //     MachineInstr *MI = &*MII;
-  //     ++MII;
-
-  //     os->indent(1*indent);
-
-  //     // Print machine instruction
-  //     MI->print(*os, MST);
-
-  //     if (MI->mayLoad()){
-  //       // This instruction probably loads from memory. It most likely loads
-  //       // into any register that is marked as "defined" in this instruction.
-  //       // This means we can track that register and watch for it being used in
-  //       // the control flow of the instructions and basic blocks in a function.
-
-  //       // Iterate over operands looking for all register operands marked as
-  //       // "defined"
-  //       for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
-  //         MachineOperand& MIOP = MI->getOperand(i);
-  //         if (MIOP.isReg() && MIOP.isDef()) {
-  //           // TODO: Track this register.
-  //           os->indent(2*indent);
-  //           *os << "DEF:";
-  //           MI->getOperand(i).print(*os, MST, mf.getSubtarget().getRegisterInfo(), mf.getTarget().getIntrinsicInfo());
-  //           *os << "\n";
-  //         }
-  //       }
-  //     }
-  //     else {
-  //       // This is not a load instruction but it may be a use. Iterate through
-  //       // the operands, looking for register usages that have not occured since
-  //       // the last load instruction on that register.
-  //       for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
-  //         MachineOperand& MIOP = MI->getOperand(i);
-
-  //         // Check if we are using a register for the first time.
-  //         // TODO: Check that this check for use is sufficient.
-  //         if (MIOP.isReg() && MIOP.isImplicit() && !MIOP.isDef()) {
-  //           // TODO: Mark register as used
-  //           os->indent(2*indent);
-  //           *os << "USE: ";
-  //           MI->getOperand(i).print(*os, MST, mf.getSubtarget().getRegisterInfo(), mf.getTarget().getIntrinsicInfo());
-  //           *os << "\n";
-  //         }
-  //       }
-  //     }
-  //   }
-
-  //   *os << "}";
-
-  //   // We may want to explore probabilistic branching for determining distance
-  //   // later. For now we just print the successors and their branching
-  //   // probabilities.
-  //   if (!MBB.succ_empty()){
-  //     MachineBranchProbabilityInfo MBPI;
-
-  //     *os << " SUCCESSORS:";
-  //     for (MachineBasicBlock::const_succ_iterator SI = MBB.succ_begin(), E = MBB.succ_end(); SI != E; ++SI) {
-  //       *os << " BB#" << (*SI)->getNumber();
-  //       if (MBB.hasSuccessorProbabilities()){
-  //         *os << '(' << MBPI.getEdgeProbability(&MBB, SI) << ')';
-  //       }
-  //     }
-  //   }
-  //   *os << "\n\n";
-  // }
-
-  // return false;
 }
