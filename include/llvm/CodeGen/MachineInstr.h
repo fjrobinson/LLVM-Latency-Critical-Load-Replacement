@@ -104,6 +104,10 @@ private:
 
   DebugLoc debugLoc;                    // Source line information.
 
+  // JR: A "risk" value assigned to load instructions signifying how far the
+  // program can proceed without the load information.
+  Optional<unsigned> risk;
+
   MachineInstr(const MachineInstr&) = delete;
   void operator=(const MachineInstr&) = delete;
   // Use MachineFunction::DeleteMachineInstr() instead.
@@ -128,6 +132,12 @@ private:
   friend class MachineFunction;
 
 public:
+  // JR: Returns the risk value if it exists
+  Optional<unsigned> getRisk() const;
+
+  // JR: Defines the risk value
+  void setRisk(unsigned risk);
+
   const MachineBasicBlock* getParent() const { return Parent; }
   MachineBasicBlock* getParent() { return Parent; }
 

@@ -182,37 +182,32 @@ namespace llvm {
       path_state = RegState::Overwritten;
     }
 
+    // Add a user to the users list
     void addUse(InstrHolder user) {
       users->push_back(user);
     }
 
-    // Insert machine instruction into user list if the register defined in the
-    // load instruction appears in the use instruction.
-    //
-    // returns true if successfully added to the user list otherwise false.
-    bool addUseCandidate(InstrHolder candidate) {
-      for (unsigned i = 0, e = candidate->getNumOperands(); i != e; ++i) {
-        MachineOperand& op = candidate->getOperand(i);
+    // Calculate risk assuming worst case (smallest value)
+    unsigned getWorstCaseRisk() const {
+      unsigned min_risk = UINT_MAX;
 
-        // Check if we are using a register for the first time.
-        // TODO: Check that this check for use is correct. (it probably isn't)
-        if (op.isReg() && !op.isDef()) {
-          unsigned op_reg = op.getReg();
-
-          if (op_reg == getReg()) {
-            assert(isUnusedOnPath() && "LoadRegister cannot have any users on this path");
-            setUsedOnPath();
-            users->push_back(candidate);
-            return true;
-          }
-        }
+      for (auto instr : *users) {
+        min_risk = std::min(min_risk, instr.getPreRisk());
       }
 
-      return false;
+      return min_risk;
     }
 
-    unsigned shortestDistance();
-    unsigned averageDistance();
+    // Calculate risk assuming average case
+    //
+    // TODO: Figure out how this works
+    unsigned getAverageCaseRisk();
+
+    // Update risk value in the held MachineInstr
+    void updateRisk() const {
+      if (isUsed())
+        instr->setRisk(getWorstCaseRisk());
+    }
 
     void print_instr(raw_ostream &os, ModuleSlotTracker &mst, unsigned indent) const {
       os.indent(indent);
@@ -288,6 +283,8 @@ namespace llvm {
       }
     }
 
+    // Read an instruction and determine what to do with it to setup the basic
+    // block information.
     void processInstr(InstrHolder mi) {
       std::vector<const MachineOperand*> def_regs;
 
@@ -420,6 +417,12 @@ namespace llvm {
 
     LoadRegPtrVec getLoadRegs() const {
       return load_regs;
+    }
+
+    void updateRisk() const {
+      for (auto lr : load_regs) {
+        lr->updateRisk();
+      }
     }
 
     // Accumulate information about this basic block
@@ -613,6 +616,12 @@ namespace llvm {
       }
     }
 
+    void updateRisk() const {
+      for (auto bb : bb_list) {
+        bb.updateRisk();
+      }
+    }
+
     //     // We may want to explore probabilistic branching for determining distance
     //     // later. For now we just print the successors and their branching
     //     // probabilities.
@@ -639,14 +648,20 @@ StringRef LoadReplacementPass::getPassName() const {
 }
 
 void LoadReplacementPass::getAnalysisUsage(AnalysisUsage &AU) const {
-    AU.setPreservesAll();
-    MachineFunctionPass::getAnalysisUsage(AU);
+  AU.setPreservesAll();
+  MachineFunctionPass::getAnalysisUsage(AU);
 }
 
 // Entry function into LoadReplacementPass
 bool LoadReplacementPass::runOnMachineFunction(MachineFunction& mf) {
-  mf.viewCFGOnly();
-
+  // Process function determining risk involved in each load instruction
   FunctionLoadInfo fli(mf);
+
+  // Push risk values to their corresponding MachineInstr
+  fli.updateRisk();
+
+  // Generate a CFG graph of this function viewable in the program "dotty"
+  //mf.viewCFGOnly();
+
   return false;
 }

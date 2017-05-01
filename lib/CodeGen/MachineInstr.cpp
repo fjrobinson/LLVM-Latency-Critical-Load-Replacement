@@ -14,6 +14,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -687,6 +688,14 @@ void MachineMemOperand::print(raw_ostream &OS, ModuleSlotTracker &MST) const {
 //===----------------------------------------------------------------------===//
 // MachineInstr Implementation
 //===----------------------------------------------------------------------===//
+
+Optional<unsigned> MachineInstr::getRisk() const {
+  return risk;
+}
+
+void MachineInstr::setRisk(unsigned risk) {
+  this->risk = risk;
+}
 
 void MachineInstr::addImplicitDefUseOperands(MachineFunction &MF) {
   if (MCID->ImplicitDefs)
