@@ -291,22 +291,22 @@ namespace llvm {
     void processInstr(InstrHolder mi) {
       std::vector<const MachineOperand*> def_regs;
 
+      bool may_load = mi->mayLoad();
       for (unsigned i = 0, e = mi->getNumOperands(); i != e; ++i) {
         const MachineOperand& mop = mi->getOperand(i);
         if (mop.isReg()) {
           // Process register
-          if (!mop.isDef())
+          if (!mop.isDef() && may_load)
             // Process the use of the register
             // TODO: Verify use
             processUse(mi, mop);
-          else
+          else if (mop.isDef())
             // Save defining registers for processing later
             def_regs.push_back(&mop);
         }
       }
 
       // Evaluate defining operands last
-      bool may_load = mi->mayLoad();
       for (const MachineOperand* mop : def_regs) {
         if (may_load) {
           processLoad(mi, *mop);
