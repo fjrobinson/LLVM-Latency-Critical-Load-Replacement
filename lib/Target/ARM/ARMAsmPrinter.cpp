@@ -121,7 +121,7 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   // globals from all functions in PromotedGlobals.
   for (auto *GV : AFI->getGlobalsPromotedToConstantPool())
     PromotedGlobals.insert(GV);
-  
+
   // Calculate this function's optimization goal.
   unsigned OptimizationGoal;
   if (F->hasFnAttribute(Attribute::OptimizeNone))
@@ -1170,7 +1170,7 @@ void ARMAsmPrinter::EmitJumpTableTBInst(const MachineInstr *MI,
 
   if (Subtarget->isThumb1Only())
     EmitAlignment(2);
-  
+
   MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel(JTI);
   OutStreamer->EmitLabel(JTISymbol);
 
@@ -1360,7 +1360,45 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
 // instructions) auto-generated.
 #include "ARMGenMCPseudoLowering.inc"
 
+static bool check_annotate_envvar() {
+  static int val = -1;
+  if(val == -1) {
+    const char* p = getenv("NO_ANNOTATE");
+    val = p && strlen(p);
+  }
+  return !val;
+}
+
+static void try_emit_high_priority(
+    const MachineInstr *MI,
+    MCStreamer &OutStreamer,
+    ARMTargetStreamer &ATS
+) {
+  if(check_annotate_envvar()) {
+    if(MI->getRisk().hasValue()) {
+      bool set_pred = false;
+      int pred_idx = MI->findFirstPredOperandIdx();
+      if(pred_idx >= 0) {
+        MachineOperand &MO = const_cast<MachineInstr*>(MI)->getOperand(pred_idx);
+        if(MO.getImm() == ARMCC::AL) {
+            MO.setImm(ARMCC::PRI);
+            set_pred = true;
+        }
+      }
+      if(!set_pred) {
+        // We couldn't use the condition code, so insert a prefix-instruction
+        // instead
+        OutStreamer.AddComment("high priority prefix");
+        uint32_t Val = 0xe7505249; // '\xe7PRI'
+        ATS.emitInst(Val);
+      }
+    }
+  }
+
+}
+
 void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
+
   const DataLayout &DL = getDataLayout();
   MCTargetStreamer &TS = *OutStreamer->getTargetStreamer();
   ARMTargetStreamer &ATS = static_cast<ARMTargetStreamer &>(TS);
@@ -1375,6 +1413,11 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   if (Subtarget->isTargetEHABICompatible() &&
        MI->getFlag(MachineInstr::FrameSetup))
     EmitUnwindingInstruction(MI);
+
+  // Placed before the special cases in the hopes that this handles them too
+  // without an extra work. If it turns out not to be the case, there will
+  // call for the relevant cases too.
+  try_emit_high_priority(MI, *OutStreamer, ATS);
 
   // Do any auto-generated pseudo lowerings.
   if (emitPseudoExpansionLowering(*OutStreamer, MI))

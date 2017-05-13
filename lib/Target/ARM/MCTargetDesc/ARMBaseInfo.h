@@ -41,7 +41,8 @@ namespace ARMCC {
     LT,            // Less than                  Less than, or unordered
     GT,            // Greater than               Greater than
     LE,            // Less than or equal         <, ==, or unordered
-    AL             // Always (unconditional)     Always (unconditional)
+    AL,            // Always (unconditional)     Always (unconditional)
+    PRI,           // High priority
   };
 
   inline static CondCodes getOppositeCondition(CondCodes CC) {
@@ -61,6 +62,7 @@ namespace ARMCC {
     case LT: return GE;
     case GT: return LE;
     case LE: return GT;
+    case PRI: llvm_unreachable("PRI isn't a real cond-code...");
     }
   }
 } // namespace ARMCC
@@ -82,6 +84,7 @@ inline static const char *ARMCondCodeToString(ARMCC::CondCodes CC) {
   case ARMCC::GT:  return "gt";
   case ARMCC::LE:  return "le";
   case ARMCC::AL:  return "al";
+  case ARMCC::PRI: return "pri";
   }
   llvm_unreachable("Unknown condition code");
 }
